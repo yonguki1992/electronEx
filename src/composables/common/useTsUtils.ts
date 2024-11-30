@@ -276,6 +276,7 @@ export function useTsUtils() {
      *  @param {() => Promise<T>}targetTask
      *  @param {Ref<boolean>} lockRef - lock 걸기위한 반응형 상태
      *  @param {TaskLockAction} [option] - 제어 옵션들
+     *  @return {Promise<T|undefined>}
      *  @template T
      *  @throws Error
      */
@@ -283,7 +284,7 @@ export function useTsUtils() {
         targetTask :() => Promise<T>,
         lockRef: Ref<boolean>,
         option?: TaskLockAction
-    ) => {
+    ): Promise<T|undefined> => {
         const taskOption = option || {};
         if (lockRef.value) {
             const {
