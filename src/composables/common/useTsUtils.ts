@@ -121,6 +121,18 @@ export function useTsUtils() {
      *      기본값(if-else 로 치면 else, switch 는 default case)이 필요하면<br>
      *      가장 마지막에 default 메서드를 체이닝하고<br>
      *      필요없으면 caseEnd 를 체이닝. 대신 결과값은 없을 수도 있음.
+     *      ex) const resCd = 404; // 예를들면 not found 에러같은거
+     *          matchHelper<number, void>(resCd)
+     *              .on(v => Array.from({ length: 9 }, (_, idx) => 400+idx).includes(v), v => {
+     *                  // 404 니까 여기에 걸리겠지~~
+     *                  console.error(`client error! error code :>> ${v}`);
+     *              })
+     *              .on(v => Array.from({ length: 12 }, (_, idx) => 500+idx).includes(v), v => {
+     *                  console.error(`internal server error! error code :>> ${v}`);
+     *              })
+     *              .otherWise(v => {
+     *                  console.log(`request success! response code :>> ${v}`);
+     *              })
      *  @template V
      *  @template R - 결과(어떻게 반환할 것인지)
      *  @see {MatcherType}
@@ -216,11 +228,12 @@ export function useTsUtils() {
         return (Object.keys(payload) as (keyof Payload)[])
             .reduce(
                 (acc: Partial<Payload>, key: keyof Payload): Partial<Payload> => {
-                    const {predicate, action: bypass} = option[key] || option.default!;
-                    if (matchHelper(payload[key]).case(predicate, bypass).caseEnd()) {
-                        acc[key] = payload[key];
+                    const {predicate, action: bypass} = option[key] || option.default;
+                    const res = matchHelper(payload[key]).case(predicate, bypass).caseEnd();
+                    if (!res) {
+                        return acc;
                     }
-                    return acc;
+                    return { ...acc, [key]: res };
                 },
                 {} as Partial<Payload>
             );
