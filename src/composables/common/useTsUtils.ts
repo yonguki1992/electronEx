@@ -1,3 +1,4 @@
+import {Ref} from "vue";
 export type MatcherPredicate<V> = (v?: V) => boolean;
 export type MatcherAction<V, R> = (v?: V) => R;
 export type MatcherBypass<R> = (v: R) => R;
@@ -17,6 +18,12 @@ export type MatcherType<V, R> = {
 export type MatcherCallbacks<V, R> = {
     predicate: MatcherPredicate<V>;
     action: MatcherAction<V, R>;
+}
+export type TaskLockAction = {
+    showErrorLog?: boolean,
+    showRejectedReason?: boolean,
+    onError?: (e: Error) => void,
+    onReject?: () => void
 }
 
 export function useTsUtils() {
@@ -47,7 +54,7 @@ export function useTsUtils() {
     const returnTrue: MatcherTrue = (): true => true;
     /**
      * 주어진 값이 유효한지 확인
-     * @param {any} value - The value to check.
+     * @param {any} [value] - The value to check.
      * @param {boolean} [required=true] - string, array, object 등은 빈 값도 유효한지 결정하는 플래그.
      * @param {Set} [seen=new Set()] - 순환참조를 회피하기 위해 이미 참조한 값인지 체크
      * @returns {boolean} - 값이 유효하면 true를 반환하고, 그렇지 않으면 false를 반환합니다.
@@ -115,7 +122,7 @@ export function useTsUtils() {
     /** 기본 옵션 정의 */
     /**
      *  전통적인 if-else 나 switch 를 선언형태로 사용할 수 있게 도와주는 함수
-     *  @param {V} value - 비교할 값
+     *  @param {V} [value] - 비교할 값
      *  @return {MatcherType<V, R>} - MatcherType 은 case, default, caseEnd 세 메서드를 가지고 있는데<br>
      *      필요한 만큼 case 로 체이닝하면 됨.<br>
      *      기본값(if-else 로 치면 else, switch 는 default case)이 필요하면<br>
@@ -173,8 +180,8 @@ export function useTsUtils() {
      *  matchHelper 만든김에 object 형태의 폼 유효성 검증하려고 만든 함수<br>
      *  검증 로직(predicate)결과값에 따라 true 혹은 false 를 반환함.
      *  @param {Payload} payload - 검증할 object
-     *  @param {Option} option - 검증로직 커스텀
-     *  @param {MatcherTrue} success - 성공시 true 반환과 함께 어떤 기능(callback) 실행할 것인지.
+     *  @param {Option} [option] - 검증로직 커스텀
+     *  @param {MatcherTrue} [success] - 성공시 true 반환과 함께 어떤 기능(callback) 실행할 것인지.
      *  @template Payload
      *  @template Option
      *  @see {matchHelper}
@@ -206,7 +213,7 @@ export function useTsUtils() {
      *  matchHelper 만든 김에 object 쭉정이 속성 필터링 용도의 함수<br>
      *  필터링 로직(predicate)결과값에 따라 해당 속성을 bypass 하거나 제거 한다.
      *  @param {Payload} payload - 필터링할 object
-     *  @param {Payload} option - 필터링로직 커스텀
+     *  @param {Payload} [option] - 필터링로직 커스텀
      *  @return {Partial<Payload>} - 필터링로직 결과로 새로 태어난 object
      *  @template Payload
      *  @template Option
@@ -263,6 +270,46 @@ export function useTsUtils() {
             }
         };
     }
+
+    /**
+     *  동시에 동작하면 안 되는 비동기 동작이 있다면 lock 을 걸고 거절함
+     *  @param {() => Promise<T>}targetTask
+     *  @param {Ref<boolean>} lockRef - lock 걸기위한 반응형 상태
+     *  @param {TaskLockAction} [option] - 제어 옵션들
+     *  @template T
+     *  @throws Error
+     */
+    const doConcurrentAsyncTask = async <T>(
+        targetTask :() => Promise<T>,
+        lockRef: Ref<boolean>,
+        option?: TaskLockAction
+    ) => {
+        const taskOption = option || {};
+        if ( lockRef.value ) {
+            const {
+                showRejectedReason,
+                onReject
+            } = taskOption;
+            showRejectedReason && console.error(`Another task(${targetTask.name}) is already running!`);
+            onReject?.();
+            return;
+        }
+        lockRef.value = true;
+        try {
+            return await targetTask();
+        } catch (e: Error) {
+            const {
+                showErrorLog,
+                onError
+            } = taskOption;
+            showErrorLog && console.error(e);
+            onError?.(e);
+            throw e;
+        } finally {
+            lockRef.value = false;
+        }
+    }
+
     return {
         matchHelper,
         bypassValue,
@@ -271,6 +318,7 @@ export function useTsUtils() {
         isValidValue,
         checkValidation,
         filteringPayload,
+        doConcurrentAsyncTask,
         recordTime
     };
 }
