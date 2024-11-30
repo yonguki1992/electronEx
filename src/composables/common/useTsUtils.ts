@@ -285,12 +285,12 @@ export function useTsUtils() {
         option?: TaskLockAction
     ) => {
         const taskOption = option || {};
-        if ( lockRef.value ) {
+        if (lockRef.value) {
             const {
                 showRejectedReason,
                 onReject
             } = taskOption;
-            showRejectedReason && console.error(`Another task(${targetTask.name}) is already running!`);
+            showRejectedReason && console.error('Another task is already running!');
             onReject?.();
             return;
         }
