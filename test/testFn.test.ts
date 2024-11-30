@@ -382,17 +382,17 @@ describe("전체 테스트", () => {
     });
 
     it("3.2. 비동기 작업 lock 테스트1", () => {
-      const asyncTaskWait1Sec = async () =>
-          new Promise(resolve => setTimeout(resolve, 1000));
-      const asyncTaskWait2Secs = async () =>
-          new Promise(resolve => setTimeout(resolve, 2000));
-
-      doConcurrentAsyncTask(asyncTaskWait2Secs, lockRef);
-      doConcurrentAsyncTask(asyncTaskWait1Sec, lockRef, {
-        showRejectedReason: true,
-        onReject: () => assert.isTrue(lockRef.value, testFailMsg)
+      const asyncTaskWait1Sec = doConcurrentAsyncTask(() => {
+        return new Promise(resolve => setTimeout(resolve, 1000));
+      }, lockRef, {
+        showRejectedReason: true, onReject: () => assert.isTrue(lockRef.value, testFailMsg)
       });
+      const asyncTaskWait2Secs = doConcurrentAsyncTask(() => {
+        return new Promise(resolve => setTimeout(resolve, 2000));
+      }, lockRef);
 
+      asyncTaskWait2Secs();
+      asyncTaskWait1Sec();
     });
   })
 });

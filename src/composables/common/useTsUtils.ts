@@ -271,6 +271,7 @@ export function useTsUtils() {
         };
     }
 
+    let currTaskName: string = "";
     /**
      *  동시에 동작하면 안 되는 비동기 동작이 있다면 lock 을 걸고 거절함
      *  @param {() => Promise<T>}targetTask
@@ -280,35 +281,39 @@ export function useTsUtils() {
      *  @template T
      *  @throws Error
      */
-    const doConcurrentAsyncTask = async <T>(
-        targetTask :() => Promise<T>,
+    const doConcurrentAsyncTask = <T>(
+        targetTask: (...params: any[]) => Promise<T>,
         lockRef: Ref<boolean>,
         option?: TaskLockAction
-    ): Promise<T|undefined> => {
-        const taskOption = option || {};
-        if (lockRef.value) {
-            const {
-                showRejectedReason,
-                onReject
-            } = taskOption;
-            showRejectedReason && console.error('Another task is already running!');
-            onReject?.();
-            return;
-        }
-        lockRef.value = true;
-        try {
-            return await targetTask();
-        } catch (e: Error) {
-            const {
-                showErrorLog,
-                onError
-            } = taskOption;
-            showErrorLog && console.error(e);
-            onError?.(e);
-            throw e;
-        } finally {
-            lockRef.value = false;
-        }
+    ): (
+        (...params: any[]) => Promise<T|undefined>
+    ) => {
+        return async (...params: any[]) => {
+            const taskOption = option || {};
+            if (lockRef.value) {
+                const {
+                    showRejectedReason,
+                    onReject
+                } = taskOption;
+                showRejectedReason && console.error('Another task is already running!');
+                onReject?.();
+                return;
+            }
+            lockRef.value = true;
+            try {
+                return await targetTask(params);
+            } catch (e: Error) {
+                const {
+                    showErrorLog,
+                    onError
+                } = taskOption;
+                showErrorLog && console.error(e);
+                onError?.(e);
+                throw e;
+            } finally {
+                lockRef.value = false;
+            }
+        };
     }
 
     return {
