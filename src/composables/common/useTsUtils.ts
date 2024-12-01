@@ -1,4 +1,5 @@
 import {Ref} from "vue";
+import {ResultWrapper, ResultWrapperType} from "@/model";
 export type MatcherPredicate<V> = (v?: V) => boolean;
 export type MatcherAction<V, R> = (v?: V) => R;
 export type MatcherBypass<R> = (v: R) => R;
@@ -22,7 +23,7 @@ export type MatcherCallbacks<V, R> = {
 export type TaskLockAction = {
     showErrorLog?: boolean,
     showRejectedReason?: boolean,
-    onError?: (e: Error) => void,
+    onError?: (e: unknown|Error) => void,
     onReject?: () => void
 }
 
@@ -182,8 +183,9 @@ export function useTsUtils() {
      *  @param {Payload} payload - 검증할 object
      *  @param {Option} [option] - 검증로직 커스텀
      *  @param {MatcherTrue} [success] - 성공시 true 반환과 함께 어떤 기능(callback) 실행할 것인지.
-     *  @template Payload
-     *  @template Option
+     *  @template Payload extends Record<string, any>
+     *  @template Option extends Partial<Record<keyof Payload, MatcherCallbacks<any, false>>>
+     *             & Record<"default", MatcherCallbacks<any, false>>
      *  @see {matchHelper}
      *  @see {MatcherType}
      *  @see {MatcherCallbacks}
@@ -193,7 +195,7 @@ export function useTsUtils() {
         Payload extends Record<string, any>,
         Option extends Partial<Record<keyof Payload, MatcherCallbacks<any, false>>>
             & Record<"default", MatcherCallbacks<any, false>>
-    >(
+    > (
         payload: Payload,
         option: Option = { default: defaultValidationOption } as Option,
         success: MatcherTrue = returnTrue
@@ -215,8 +217,8 @@ export function useTsUtils() {
      *  @param {Payload} payload - 필터링할 object
      *  @param {Payload} [option] - 필터링로직 커스텀
      *  @return {Partial<Payload>} - 필터링로직 결과로 새로 태어난 object
-     *  @template Payload
-     *  @template Option
+     *  @template Payload extends Record<string, any>
+     *  @template Option extends Partial<Record<keyof Payload, MatcherCallbacks<any, any>>> & Record<"default", MatcherCallbacks<any, any>>
      *  @see {matchHelper}
      *  @see {MatcherType}
      *  @see {MatcherCallbacks}
@@ -225,7 +227,7 @@ export function useTsUtils() {
     const filteringPayload = <
         Payload extends Record<string, any>,
         Option extends Partial<Record<keyof Payload, MatcherCallbacks<any, any>>> & Record<"default", MatcherCallbacks<any, any>>
-    >(
+    > (
         payload: Payload,
         option: Option = { default: defaultFilterOption } as Option
     ): Partial<Payload> => {
@@ -251,44 +253,45 @@ export function useTsUtils() {
      *  3.005 초 나오니까 아주까지는 아니어도 근사하게 동작시간 체크할 수 있음.
      *  @param {(...param: any[]) => any} task
      *  @param {string} label
-     *  @return {(...param: any[]) => Promise<any>}
+     *  @return {(...param: any[]) => Promise<ResultWrapperType<{ resultData: any, error: Error|unknown }>>}
      */
     const recordTime = (
         task: (...param: any[]) => any,
         label: string
-    ): (
-        (...params: any[]) => Promise<any>
-    ) => {
-        return async (...params: any[]): Promise<any> => {
+    ): ((...params: any[]) => Promise<ResultWrapperType<{ resultData: any, error: Error|unknown }>>)=> {
+        return async (...params: any[]): Promise<ResultWrapperType<{ resultData: any, error: Error|unknown }>> => {
+            const resultWrapper = ResultWrapper.create<{ resultData: any, error: Error|unknown }>();
+            let res: any;
             console.time(label);
             try {
-                return await task(...params);
+                res = await task(...params);
             } catch (error) {
                 console.error(error);
+                resultWrapper.error = error;
+                return resultWrapper;
             } finally {
                 console.timeEnd(label);
             }
+            resultWrapper.resultData = res;
+            resultWrapper.result = true;
+            return resultWrapper;
         };
     }
-
-    let currTaskName: string = "";
     /**
      *  동시에 동작하면 안 되는 비동기 동작이 있다면 lock 을 걸고 거절함
-     *  @param {() => Promise<T>}targetTask
+     *  @param {() => Promise<ResultWrapperType<T>>}targetTask
      *  @param {Ref<boolean>} lockRef - lock 걸기위한 반응형 상태
      *  @param {TaskLockAction} [option] - 제어 옵션들
-     *  @return {Promise<T|undefined>}
-     *  @template T
+     *  @return {Promise<ResultWrapperType<T>>}
+     *  @template T extends Record<string, any> | { error: Error|unknown }
      *  @throws Error
      */
-    const doConcurrentAsyncTask = <T>(
-        targetTask: (...params: any[]) => Promise<T>,
+    const doConcurrentAsyncTask = <T extends Record<string, any> | { error: Error|unknown }> (
+        targetTask: (...params: any[]) => Promise<ResultWrapperType<T>>,
         lockRef: Ref<boolean>,
         option?: TaskLockAction
-    ): (
-        (...params: any[]) => Promise<T|undefined>
-    ) => {
-        return async (...params: any[]) => {
+    ): ((...params: any[]) => Promise<ResultWrapperType<T>>) => {
+        return async (...params: any[]): Promise<ResultWrapperType<T>> => {
             const taskOption = option || {};
             if (lockRef.value) {
                 const {
@@ -297,24 +300,47 @@ export function useTsUtils() {
                 } = taskOption;
                 showRejectedReason && console.error('Another task is already running!');
                 onReject?.();
-                return;
+                return ResultWrapper.create<T>();
             }
             lockRef.value = true;
             try {
-                return await targetTask(params);
-            } catch (e: Error) {
+                return await targetTask(...params);
+            } catch (error: Error|unknown) {
                 const {
                     showErrorLog,
                     onError
                 } = taskOption;
-                showErrorLog && console.error(e);
-                onError?.(e);
-                throw e;
+                !!showErrorLog && console.error(error);
+                if (!onError) {
+                    throw error;
+                }
+                onError(error);
+                return ResultWrapper.create<T>({ error } as T);
             } finally {
                 lockRef.value = false;
             }
         };
     }
+    /**
+     *. Promise + setTimeout = sleep
+     *  @param {number} timeout - 시간값(밀리초)
+     *  @param {boolean|Error} rejected -
+     *  @param {object} timerObj 타이머 결과
+     *  @param {number} [timerObj.timer] 타이머
+     */
+    const timeoutTask = (
+        timeout: number,
+        rejected: boolean|Error = false,
+        timerObj: { timer?: ReturnType<typeof setTimeout> } = {},
+    ): Promise<void> => new Promise((resolve, reject) => {
+        timerObj.timer = setTimeout(() => matchHelper(rejected)
+            .case(v => !v, () => resolve())
+            .case(v => typeof v === 'boolean' && v, () => reject())
+            .case(v => typeof v === 'object', reject)
+            .caseEnd(),
+            timeout
+        );
+    });
 
     return {
         matchHelper,
@@ -325,6 +351,7 @@ export function useTsUtils() {
         checkValidation,
         filteringPayload,
         doConcurrentAsyncTask,
-        recordTime
+        recordTime,
+        timeoutTask
     };
 }

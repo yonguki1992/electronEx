@@ -1,6 +1,7 @@
 import {describe, expect, it, assert} from 'vitest';
 import {useTsUtils} from "../src/composables/common/useTsUtils";
-import {ref} from "vue";
+import {reactive, ref, toRef} from "vue";
+import {ResultWrapper} from "../src/model";
 const {
   recordTime,
   matchHelper,
@@ -9,7 +10,8 @@ const {
   returnFalse,
   filteringPayload,
   checkValidation,
-  doConcurrentAsyncTask
+  doConcurrentAsyncTask,
+  timeoutTask
 } = useTsUtils();
 
 const testFailMsg: string = "검증 실패";
@@ -299,16 +301,16 @@ describe("전체 테스트", () => {
   });
 
   describe("2. recordTime 테스트", () => {
-    const waitForSec = 3;
+    const waitForMilliSec = 3 * 1000;
     const testLen = 16500000;
-    const testTarget = `TEST${testLen}`;
     const labels = [
-      `2.1. recordTime 테스트 ${waitForSec} seconds`,
+      `2.1. recordTime 테스트 ${waitForMilliSec/1000} seconds`,
       `2.2. traditional if-else recordTime ${testLen.toLocaleString()} loops`,
       `2.3. Map iterator[switchLike] recordTime ${testLen.toLocaleString()} loops`,
       `2.4. matchHelper recordTime ${testLen.toLocaleString()} loops`
     ];
 
+    const testTarget = `TEST${testLen}`;
     const keyGen = (v: number) => `TEST${(v + 1).toString().padStart(`${testLen}`.length, "0")}`
     // 전통방식 if-else
     const recordIfElseLoops = recordTime((param) => {
@@ -353,46 +355,82 @@ describe("전체 테스트", () => {
     }, labels[3]);
 
     it(labels[0], async () => {
-      const recordFunc = recordTime(async (params) => {
-        for (let i = 0, len = params; i < len; i++) {
-          await new Promise(resolve => setTimeout(resolve, 1000));
-        }
-      }, labels[0]);
-      await recordFunc(waitForSec);
+      const recordFunc = recordTime(timeoutTask, labels[0]);
+      await recordFunc(waitForMilliSec);
     });
 
     it(labels[1], async () => {
-      expect(await recordIfElseLoops(testLen)).eq(testLen);
+      expect((await recordIfElseLoops(testLen)).resultData).eq(testLen);
     });
 
     it(labels[2], async () => {
-      expect(await recordSwitchLikeLoops(testLen)).eq(testLen);
+      expect((await recordSwitchLikeLoops(testLen)).resultData).eq(testLen);
     });
 
     it(labels[3], async () => {
-      expect(await recordMatcherLoops(testLen)).eq(testLen);
+      expect((await recordMatcherLoops(testLen)).resultData).eq(testLen);
     });
   });
 
   describe("3. 비동기 작업 lock 테스트", () => {
-    const lockRef = ref(false);
+    const testRefNames = [ 'test1', 'test2', 'test3' ];
+    const lockRef = reactive(testRefNames
+        .reduce((acc, next) => ({ ...acc, [next]: false }), {})
+    );
+    const rejectTimer = (timeOut, error) => timeoutTask(timeOut, error);
 
-    it("3.1. vitest 반응형 상태 테스트", () => {
-      assert.isFalse(lockRef.value, testFailMsg);
+    it("3.0. timeoutTask 테스트", async () => {
+      await Promise.all([
+        rejectTimer(1000, new Error("test")).catch(e => expect(e).instanceof(Error)),
+        recordTime(timeoutTask, "3.0. timeoutTask 테스트")(2000),
+      ]);
     });
 
-    it("3.2. 비동기 작업 lock 테스트1", () => {
-      const asyncTaskWait1Sec = doConcurrentAsyncTask(() => {
-        return new Promise(resolve => setTimeout(resolve, 1000));
-      }, lockRef, {
-        showRejectedReason: true, onReject: () => assert.isTrue(lockRef.value, testFailMsg)
+    it("3.1. 비동기 작업 lock 테스트1", async () => {
+      const test1Ref = toRef(lockRef, testRefNames[0]);
+      const asyncTaskWait = doConcurrentAsyncTask(async (timeOut) => {
+        await timeoutTask(timeOut);
+        const res = ResultWrapper.create();
+        res.result = true;
+        return res;
+      }, test1Ref);
+      let res = await asyncTaskWait(2000);
+      assert.isTrue(res.result, testFailMsg);
+      res = await asyncTaskWait(1000);
+      assert.isTrue(res.result, testFailMsg);
+    });
+
+    it("3.2. 비동기 작업 lock 테스트2(임계영역 침범)", async () => {
+      const test1Ref = toRef(lockRef, testRefNames[0]);
+      const asyncTaskWait = doConcurrentAsyncTask(timeoutTask, test1Ref);
+      const asyncTaskWaitWithOption = doConcurrentAsyncTask(timeoutTask, test1Ref, {
+        showRejectedReason: true,
+        onReject: () => assert.isTrue(lockRef.test1, testFailMsg)
       });
-      const asyncTaskWait2Secs = doConcurrentAsyncTask(() => {
-        return new Promise(resolve => setTimeout(resolve, 2000));
-      }, lockRef);
-
-      asyncTaskWait2Secs();
-      asyncTaskWait1Sec();
+      await Promise.all([
+        asyncTaskWait(2000),
+        asyncTaskWaitWithOption(1000)
+      ]);
     });
-  })
+
+    it("3.3. 비동기 작업 lock 테스트3(error handler)", async () => {
+      const test2Ref = toRef(lockRef, testRefNames[1]);
+      const test3Ref = toRef(lockRef, testRefNames[2]);
+
+      const asyncTaskThrowsErrorWithHandler = doConcurrentAsyncTask(rejectTimer, test2Ref, {
+        showErrorLog: true,
+        onError: e => assert.isOk(e, testFailMsg)
+      });
+      const asyncTaskThrowsError = doConcurrentAsyncTask(rejectTimer, test3Ref);
+
+      await Promise.all([
+        asyncTaskThrowsErrorWithHandler(1000, new Error('test1')),
+        asyncTaskThrowsError(1000, new Error('test2'))
+          .catch(e => {
+            console.error(e);
+            assert.isOk(e, testFailMsg)
+          })
+      ]);
+    });
+  });
 });
